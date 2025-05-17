@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Route Planner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Leaflet CSS (SRI removed to avoid digest mismatch blocking) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+<style>
+html,body {height:100%; margin:0; font-family:Arial, sans-serif;}
+#map {height:60vh;}
+.controls {padding:10px; background:#f7f7f7;}
+input[type=text] {padding:6px; width:60%; max-width:400px;}
+button {padding:6px 10px; margin-left:4px; cursor:pointer;}
+#stopsList {list-style:none; padding:0; margin-top:10px;}
+#stopsList li {padding:6px; background:#fff; border:1px solid #ddd; margin-bottom:4px; display:flex; align-items:center; justify-content:space-between;}
+#stopsList li span {flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.actions button {margin-left:4px;}
+.leaflet-popup-content-wrapper button {padding:4px 8px; cursor:pointer;}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="controls">
+  <div>
+    <input type="text" id="addressInput" placeholder="Enter street address">
+    <button id="addAddressBtn">Add Address</button>
+  </div>
+  <ul id="stopsList"></ul>
+  <div style="margin-top:10px;">
+    <input type="text" id="routeName" placeholder="Route name">
+    <button id="saveRouteBtn">Save Route</button>
+  </div>
+</div>
+
+<!-- Leaflet JS (SRI removed) -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+// Initialize map centred on San Juan, Puerto Rico
+const map = L.map('map').setView([18.4655, -66.1057], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors'
+}).addTo(map);
+
+let stops = [];
+let polyline = L.polyline([], {color:'blue'}).addTo(map);
+
+function updatePolyline() {
+  polyline.setLatLngs(stops.map(s => [s.lat, s.lng]));
+}
+
+function renderList() {
+  const list = document.getElementById('stopsList');
+  list.innerHTML = '';
+  stops.forEach((s, idx) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = s.address || `Stop ${idx+1}`;
+    li.appendChild(span);
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    // Move Up Button
+    const upBtn = document.createElement('button');
+    upBtn.textContent = '▲';
+    upBtn.disabled = idx === 0;
+    upBtn.onclick = () => {
+      [stops[idx-1], stops[idx]] = [stops[idx], stops[idx-1]];
+      update();
+    };
+
+    // Move Down Button
+    const downBtn = document.createElement('button');
+    downBtn.textContent = '▼';
+    downBtn.disabled = idx === stops.length - 1;
+    downBtn.onclick = () => {
+      [stops[idx], stops[idx+1]] = [stops[idx+1], stops[idx]];
+      update();
+    };
+
+    // Edit Button
+    const editBtn = document.createElement('button');
+    editBtn.textContent = '✎';
+    editBtn.onclick = () => editStop(idx);
+
+    // Delete Button
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '🗑';
+    delBtn.onclick = () => removeStop(idx);
+
+    actions.append(upBtn, downBtn, editBtn, delBtn);
+    li.appendChild(actions);
+    list.appendChild(li);
+  });
+}
+
+function update() {
+  renderList();
+  updatePolyline();
+}
+
+function addStop(lat, lng, address) {
+  const marker = L.marker([lat, lng]).addTo(map).bindPopup(address || 'Stop');
+  stops.push({lat, lng, address, marker});
+  update();
+}
+
+function removeStop(idx) {
+  map.removeLayer(stops[idx].marker);
+  stops.splice(idx, 1);
+  update();
+}
+
+function editStop(idx) {
+  const newAddr = prompt('Enter new address', stops[idx].address || '');
+  if (!newAddr) return;
+  geocodeAddress(newAddr)
+    .then(res => {
+      const { lat, lon, display_name } = res;
+      stops[idx].lat = parseFloat(lat);
+      stops[idx].lng = parseFloat(lon);
+      stops[idx].address = display_name;
+      stops[idx].marker.setLatLng([lat, lon]).bindPopup(display_name);
+      update();
+    })
+    .catch(() => alert('Address not found'));
+}
+
+async function geocodeAddress(addr) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(addr)}`;
+  const res = await fetch(url, {
+    headers: { 'Accept-Language': 'en' },
+    method: 'GET'
+  });
+  const data = await res.json();
+  if (data.length === 0) throw new Error('not found');
+  return data[0];
+}
+
+// Add address via text input
+document.getElementById('addAddressBtn').addEventListener('click', () => {
+  const addr = document.getElementById('addressInput').value.trim();
+  if (!addr) return;
+  geocodeAddress(addr)
+    .then(res => {
+      addStop(parseFloat(res.lat), parseFloat(res.lon), res.display_name);
+      map.setView([res.lat, res.lon], 15);
+      document.getElementById('addressInput').value = '';
+    })
+    .catch(() => alert('Address not found'));
+});
+
+// Context‑menu (right‑click) to add stop at coordinates
+map.on('contextmenu', function (e) {
+  const { latlng } = e;
+  const popup = L.popup()
+    .setLatLng(latlng)
+    .setContent('<button id="addStopHere">Add stop here</button>')
+    .openOn(map);
+
+  setTimeout(() => {
+    document.getElementById('addStopHere').onclick = () => {
+      addStop(latlng.lat, latlng.lng, `(${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)})`);
+      map.closePopup();
+    };
+  }, 0);
+});
+
+// Save route to LocalStorage
+document.getElementById('saveRouteBtn').addEventListener('click', () => {
+  const name = document.getElementById('routeName').value.trim();
+  if (!name) {
+    alert('Enter route name');
+    return;
+  }
+  if (stops.length === 0) {
+    alert('No stops to save');
+    return;
+  }
+  const saved = JSON.parse(localStorage.getItem('routes') || '{}');
+  saved[name] = stops.map(s => ({ lat: s.lat, lng: s.lng, address: s.address }));
+  localStorage.setItem('routes', JSON.stringify(saved));
+  alert('Route saved as ' + name);
+});
+</script>
+</body>
+</html>
